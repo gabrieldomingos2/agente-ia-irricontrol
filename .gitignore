@@ -1,0 +1,53 @@
+# === Python: Ambiente virtual ===
+.venv/
+env/
+venv/
+
+# === Python: Cache e arquivos compilados ===
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.pyc
+
+# === Arquivos do sistema operacional ===
+.DS_Store
+Thumbs.db
+
+# Ignorar arquivos de banco de dados
+*.db
+*.sqlite3
+/data/
+
+# === Temporários e logs ===
+*.log
+*.tmp
+*.bak
+*.swp
+
+# === IDEs e editores ===
+.vscode/
+.idea/
+*.code-workspace
+
+# === Variáveis de ambiente (segredos) ===
+.env
+*.env
+
+# === Frontend (Node.js) ===
+node_modules/
+dist/
+build/
+
+# === Arquivos de deploy estáticos (mantém a pasta com .keep) ===
+backend/static/imagens/*
+!backend/static/imagens/.keep
+
+backend/static/arquivos/*
+!backend/static/arquivos/.keep
+
+# === Scripts e logs locais ===
+*.bat
+*.sh
+irricontrol_app.log
+*.ps1

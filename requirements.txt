@@ -1,0 +1,9 @@
+# Dependências do Bot Principal
+python-telegram-bot==20.6
+openai==1.14.3
+python-dotenv==1.0.1
+
+# Dependências do Dashboard
+streamlit
+pandas
+plotly-express

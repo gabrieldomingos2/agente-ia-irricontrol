@@ -15,9 +15,7 @@ __pycache__/
 Thumbs.db
 
 # Ignorar arquivos de banco de dados
-*.db
 *.sqlite3
-/data/
 
 # === Temporários e logs ===
 *.log

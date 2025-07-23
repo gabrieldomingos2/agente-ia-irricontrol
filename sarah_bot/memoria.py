@@ -152,3 +152,19 @@ def obter_clientes_para_follow_up() -> List[Dict[str, Any]]:
         return clientes
     except (sqlite3.OperationalError, FileNotFoundError):
         return []
+    
+    
+
+def deletar_cliente(user_id: str):
+    """Deleta um cliente do banco de dados com base no user_id."""
+    user_id_str = str(user_id)
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM clientes WHERE user_id = ?", (user_id_str,))
+            conn.commit()
+            return cursor.rowcount > 0 # Retorna True se alguma linha foi deletada
+    except sqlite3.Error as e:
+        # Em produção, o ideal seria usar o logger aqui também
+        print(f"Erro ao deletar cliente {user_id_str}: {e}")
+        return False    

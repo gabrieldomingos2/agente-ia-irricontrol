@@ -1,14 +1,9 @@
-# requirements.txt - Dependências Completas do Projeto Sarah
+# Dependências do Bot Principal
+python-telegram-bot==20.6
+openai==1.14.3
+python-dotenv==1.0.1
 
-# --- Core do Bot e IA ---
-python-telegram-bot>=20.0
-openai>=1.0.0
-python-dotenv>=1.0.0
-requests>=2.0.0
-
-# --- Dashboard e Visualização de Dados ---
-streamlit>=1.0.0
-pandas>=1.0.0
-plotly>=5.0.0
-wordcloud>=1.8.0
-matplotlib>=3.0.0
+# Dependências do Dashboard
+streamlit
+pandas
+plotly-express

@@ -1,4 +1,4 @@
-# memoria.py
+# memoria.py (v16.1 - Correção de Tipo)
 import sqlite3
 import json
 import os
@@ -10,15 +10,11 @@ DATA_DIR = "data"
 DB_PATH = os.path.join(DATA_DIR, "sarah_bot.db")
 
 def init_db():
-    """
-    Inicializa o banco de dados e cria/atualiza a tabela de clientes.
-    Adiciona colunas de forma idempotente para não quebrar bancos antigos.
-    """
+    """Inicializa o banco de dados e cria/atualiza a tabela de clientes de forma idempotente."""
     os.makedirs(DATA_DIR, exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     
-    # Cria a tabela se ela não existir, já com os novos campos
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS clientes (
         user_id TEXT PRIMARY KEY,
@@ -38,19 +34,20 @@ def init_db():
         tags_detectadas TEXT,
         lead_score INTEGER DEFAULT 0,
         video_enviado INTEGER DEFAULT 0,
-        notificacao_enviada INTEGER DEFAULT 0, -- NOVO CAMPO
-        ultima_interacao_humana TEXT -- NOVO CAMPO
+        notificacao_enviada INTEGER DEFAULT 0,
+        ultima_interacao_humana TEXT,
+        lead_score_historico TEXT,
+        estado_conversa_anterior TEXT,
+        etapa_jornada TEXT 
     )
     """)
     
-    # Adiciona colunas de forma segura para garantir retrocompatibilidade
     colunas_existentes = [desc[1] for desc in cursor.execute("PRAGMA table_info(clientes)").fetchall()]
     
     colunas_a_adicionar = {
-        'nome_fazenda': 'TEXT',
-        'localizacao': 'TEXT',
-        'notificacao_enviada': 'INTEGER DEFAULT 0',
-        'ultima_interacao_humana': 'TEXT'
+        'lead_score_historico': 'TEXT',
+        'estado_conversa_anterior': 'TEXT',
+        'etapa_jornada': 'TEXT'
     }
 
     for col, tipo in colunas_a_adicionar.items():
@@ -68,36 +65,24 @@ def dict_factory(cursor: sqlite3.Cursor, row: sqlite3.Row) -> Dict[str, Any]:
     return d
 
 def get_cliente(user_id: str) -> Optional[Dict[str, Any]]:
-    """
-    Recupera os dados de um cliente específico do banco de dados.
-    NOTA: O uso de sqlite3 em um ambiente concorrente (ex: web app com múltiplos threads)
-    pode exigir estratégias de pooling de conexão ou uma fila de escrita para evitar "database is locked".
-    Para um bot do Telegram com `python-telegram-bot`, que geralmente processa updates sequencialmente,
-    o risco é baixo, mas é um ponto de atenção para escalabilidade futura.
-    """
+    """Recupera os dados de um cliente específico do banco de dados."""
     user_id_str = str(user_id)
     try:
-        conn = sqlite3.connect(DB_PATH, timeout=10) # Timeout para evitar lock
+        conn = sqlite3.connect(DB_PATH, timeout=10)
         conn.row_factory = dict_factory
         cursor = conn.cursor()
         cursor.execute("SELECT * FROM clientes WHERE user_id = ?", (user_id_str,))
         cliente = cursor.fetchone()
         conn.close()
         if cliente:
-            # Deserializa campos JSON
-            if cliente.get('historico_conversa'):
-                cliente['historico_conversa'] = json.loads(cliente['historico_conversa'])
-            else:
-                cliente['historico_conversa'] = []
-                
-            if cliente.get('tags_detectadas'):
-                cliente['tags_detectadas'] = json.loads(cliente['tags_detectadas'])
-            else:
-                cliente['tags_detectadas'] = []
+            for key in ['historico_conversa', 'tags_detectadas', 'lead_score_historico']:
+                if cliente.get(key) and isinstance(cliente[key], str):
+                    cliente[key] = json.loads(cliente[key])
+                elif not cliente.get(key):
+                    cliente[key] = []
         return cliente
     except (sqlite3.OperationalError, FileNotFoundError):
         return None
-
 
 def recuperar_ou_criar_cliente(user_id: str, nome_telegram: str) -> Dict[str, Any]:
     """Busca um cliente. Se não existir, cria um registro e o retorna."""
@@ -105,6 +90,7 @@ def recuperar_ou_criar_cliente(user_id: str, nome_telegram: str) -> Dict[str, An
     if cliente:
         return cliente
     
+    now_iso = datetime.now().isoformat()
     novo_cliente = {
         "user_id": str(user_id),
         "nome": nome_telegram,
@@ -114,8 +100,8 @@ def recuperar_ou_criar_cliente(user_id: str, nome_telegram: str) -> Dict[str, An
         "pivos": 0,
         "bombas": 0,
         "estado_conversa": "INICIANTE",
-        "data_criacao": datetime.now().isoformat(),
-        "data_ultimo_contato": datetime.now().isoformat(),
+        "data_criacao": now_iso,
+        "data_ultimo_contato": now_iso,
         "dor_mencionada": None,
         "orcamento_enviado": 0.0,
         "follow_up_enviado": 0,
@@ -125,6 +111,9 @@ def recuperar_ou_criar_cliente(user_id: str, nome_telegram: str) -> Dict[str, An
         "video_enviado": 0,
         "notificacao_enviada": 0,
         "ultima_interacao_humana": None,
+        "lead_score_historico": f'[{{"score": 0, "timestamp": "{now_iso}"}}]',
+        "estado_conversa_anterior": None,
+        "etapa_jornada": "DESCOBERTA"
     }
 
     colunas = ', '.join(novo_cliente.keys())
@@ -135,9 +124,9 @@ def recuperar_ou_criar_cliente(user_id: str, nome_telegram: str) -> Dict[str, An
         cursor.execute(f"INSERT INTO clientes ({colunas}) VALUES ({placeholders})", tuple(novo_cliente.values()))
         conn.commit()
     
-    # Retorna o dicionário com as listas vazias, e não o JSON string "[]"
     novo_cliente['historico_conversa'] = []
     novo_cliente['tags_detectadas'] = []
+    novo_cliente['lead_score_historico'] = [{"score": 0, "timestamp": now_iso}]
     return novo_cliente
 
 def atualizar_cliente(user_id: str, dados_atualizados: Dict[str, Any]):
@@ -148,15 +137,12 @@ def atualizar_cliente(user_id: str, dados_atualizados: Dict[str, Any]):
     update_values = {}
     for key, value in dados_atualizados.items():
         if isinstance(value, (list, dict)):
-            # Garante que o JSON é salvo sem caracteres de escape ASCII
             update_values[key] = json.dumps(value, ensure_ascii=False)
         else:
             update_values[key] = value
 
-    # Constrói a query de forma dinâmica e segura
     update_fields = ", ".join([f"{key} = ?" for key in update_values])
     values = list(update_values.values()) + [user_id_str]
-    
     query = f"UPDATE clientes SET {update_fields} WHERE user_id = ?"
     
     try:
@@ -170,17 +156,10 @@ def atualizar_cliente(user_id: str, dados_atualizados: Dict[str, Any]):
 def adicionar_mensagem_historico(user_id: str, role: str, content: str):
     """Adiciona uma nova mensagem ao histórico de conversa de um cliente."""
     cliente = get_cliente(user_id)
-    if not cliente:
-        print(f"Tentativa de adicionar mensagem para cliente inexistente: {user_id}")
-        return
+    if not cliente: return
 
     historico = cliente.get("historico_conversa", [])
-    if not isinstance(historico, list): # Verificação de segurança caso o dado esteja corrompido
-        historico = []
-        
     historico.append({"role": role, "content": content})
-    
-    # Limita o histórico às últimas 30 mensagens para performance e custo
     max_historico = 30
     historico = historico[-max_historico:]
     
@@ -194,28 +173,38 @@ def deletar_cliente(user_id: str) -> bool:
             cursor = conn.cursor()
             cursor.execute("DELETE FROM clientes WHERE user_id = ?", (user_id_str,))
             conn.commit()
-            return cursor.rowcount > 0 # Retorna True se uma linha foi deletada
+            return cursor.rowcount > 0
     except sqlite3.Error as e:
         print(f"Erro ao deletar cliente {user_id_str}: {e}")
         return False
-    
-def obter_clientes_para_follow_up() -> List[Dict[str, Any]]:
-    """
-    Busca clientes que receberam um orçamento e estão em um estado que permite follow-up.
-    - O orçamento foi enviado (orcamento_enviado > 0).
-    - O ciclo de follow-up não foi finalizado (follow_up_enviado < 2).
-    """
-    clientes_para_follow_up = []
+
+def obter_clientes_ativos() -> List[Dict[str, Any]]:
+    """Busca todos os clientes que não estão pausados ou com follow-up finalizado."""
+    clientes_ativos = []
     try:
-        # Conexão com timeout para evitar locks em caso de concorrência
         with sqlite3.connect(DB_PATH, timeout=10) as conn:
             conn.row_factory = dict_factory
             cursor = conn.cursor()
-            # Seleciona clientes que receberam orçamento e não estão em um estado final
             query = """
-                SELECT user_id, nome, data_ultimo_contato, follow_up_enviado, dor_mencionada
-                FROM clientes
-                WHERE orcamento_enviado > 0 AND follow_up_enviado < 2
+                SELECT * FROM clientes
+                WHERE estado_conversa != 'PAUSADO_PELO_GERENTE' AND estado_conversa != 'FOLLOW_UP_FINALIZADO'
+            """
+            cursor.execute(query)
+            clientes_ativos = cursor.fetchall()
+    except sqlite3.Error as e:
+        print(f"Erro ao buscar clientes ativos: {e}")
+    return clientes_ativos
+    
+def obter_clientes_para_follow_up() -> List[Dict[str, Any]]:
+    """Busca clientes que receberam um orçamento e estão em um estado que permite follow-up."""
+    clientes_para_follow_up = []
+    try:
+        with sqlite3.connect(DB_PATH, timeout=10) as conn:
+            conn.row_factory = dict_factory
+            cursor = conn.cursor()
+            query = """
+                SELECT * FROM clientes
+                WHERE orcamento_enviado > 0 AND follow_up_enviado < 2 AND estado_conversa != 'PAUSADO_PELO_GERENTE'
             """
             cursor.execute(query)
             clientes_para_follow_up = cursor.fetchall()

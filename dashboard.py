@@ -1,4 +1,4 @@
-# dashboard.py (v14.1 - Corrigido)
+# dashboard.py (v15.0 - Centralizado)
 import streamlit as st
 import pandas as pd
 import sqlite3
@@ -8,11 +8,12 @@ import plotly.express as px
 import plotly.graph_objects as go
 from wordcloud import WordCloud
 import matplotlib.pyplot as plt
-import os # <--- ADICIONADO
+
+# --- Importação da Configuração Centralizada ---
+from sarah_bot.config import LIMITE_LEAD_QUENTE
 
 # Caminho para o banco de dados
 DB_PATH = "data/sarah_bot.db"
-LIMITE_LEAD_QUENTE = int(os.getenv("LIMITE_LEAD_QUENTE", 40))
 
 # Função para carregar os dados (com cache para performance)
 @st.cache_data(ttl=60)
@@ -24,7 +25,9 @@ def carregar_dados():
         # Converte colunas JSON e trata valores nulos/inválidos
         df['historico_conversa'] = df['historico_conversa'].apply(lambda x: json.loads(x) if isinstance(x, str) else [])
         df['tags_detectadas'] = df['tags_detectadas'].apply(lambda x: json.loads(x) if isinstance(x, str) else [])
-        df['dor_mencionada'] = df['dor_mencionada'].fillna('') # Garante que a coluna não tenha NaNs
+        df['lead_score_historico'] = df['lead_score_historico'].apply(lambda x: json.loads(x) if isinstance(x, str) else [])
+        df['dor_mencionada'] = df['dor_mencionada'].fillna('')
+        df['etapa_jornada'] = df['etapa_jornada'].fillna('DESCONHECIDA')
         return df
     except (sqlite3.OperationalError, pd.io.sql.DatabaseError):
         st.error(f"Banco de dados não encontrado ou corrompido em '{DB_PATH}'. Rode o bot.py primeiro para criá-lo e gerar dados.")
@@ -50,14 +53,13 @@ else:
         orcamentos_enviados = df_clientes[df_clientes['orcamento_enviado'] > 0].shape[0]
 
         col1.metric("Total de Leads", total_leads)
-        col2.metric("Leads Quentes (Score >= 40)", f"{leads_quentes} ({leads_quentes/total_leads:.1%})")
+        col2.metric(f"Leads Quentes (Score >= {LIMITE_LEAD_QUENTE})", f"{leads_quentes} ({leads_quentes/total_leads:.1%})")
         col3.metric("Orçamentos Enviados", f"{orcamentos_enviados} ({orcamentos_enviados/total_leads:.1%})")
         col4.metric("Lead Score Médio", f"{df_clientes['lead_score'].mean():.2f}")
 
         st.divider()
-        st.header(" funnel de Vendas")
+        st.header("- Funil de Vendas")
         
-        # --- NOVO: Funil de Vendas ---
         estados_funil = ['INICIANTE', 'AGUARDANDO_DOR', 'CONFIRMANDO_INTERESSE', 'ORCAMENTO_APRESENTADO', 'FECHAMENTO']
         contagem_estados = df_clientes['estado_conversa'].value_counts()
         valores_funil = [contagem_estados.get(estado, 0) for estado in estados_funil]
@@ -77,7 +79,6 @@ else:
 
         with col_dor:
             st.header("😟 Principais Dores dos Clientes")
-            # --- NOVO: Nuvem de Palavras ---
             texto_dores = ' '.join(df_clientes['dor_mencionada'].dropna())
             if texto_dores:
                 wordcloud = WordCloud(width=800, height=400, background_color='white').generate(texto_dores)
@@ -90,7 +91,6 @@ else:
 
         with col_tags:
             st.header("🎯 Análise de Tags por Performance")
-            # --- NOVO: Análise de Tags por Performance ---
             tags_quentes = [tag for sublist in df_clientes[df_clientes['lead_score'] >= LIMITE_LEAD_QUENTE]['tags_detectadas'] for tag in sublist]
             tags_frias = [tag for sublist in df_clientes[df_clientes['lead_score'] < LIMITE_LEAD_QUENTE]['tags_detectadas'] for tag in sublist]
             
@@ -106,7 +106,6 @@ else:
     with tab2:
         st.header("🗣️ Análise de Leads Individuais")
         
-        # Filtro para encontrar leads mais rápido
         filtro_nome = st.text_input("Buscar lead por nome...")
         df_filtrado = df_clientes
         if filtro_nome:
@@ -116,22 +115,36 @@ else:
         cliente_selecionado_nome = st.selectbox("Selecione um Cliente", lista_clientes)
         
         if cliente_selecionado_nome:
-            cliente_data = df_filtrado[df_filtrado['nome'] == cliente_selecionado_nome].iloc[0]
+            cliente_data = df_filtrado[df_filtrado['nome'] == cliente_selecionado_nome].iloc[0].to_dict()
             
             st.subheader(f"Detalhes de {cliente_data['nome']}")
-            c1, c2, c3 = st.columns(3)
+            c1, c2, c3, c4 = st.columns(4)
             c1.info(f"**Estado da Conversa:** {cliente_data['estado_conversa']}")
             c2.warning(f"**Perfil Detectado:** {cliente_data['perfil']}")
             c3.error(f"**Lead Score:** {cliente_data['lead_score']}")
+            c4.success(f"**Etapa da Jornada:** {cliente_data.get('etapa_jornada', 'N/A')}")
             
-            st.write(f"**📍 Localização:** `{cliente_data['localizacao'] or 'Não informada'}`")
-            st.write(f"**🏡 Fazenda:** `{cliente_data['nome_fazenda'] or 'Não informada'}`")
-            st.write(f"**🎯 Tags:** `{', '.join(cliente_data['tags_detectadas'])}`")
+            st.write(f"**📍 Localização:** `{cliente_data.get('localizacao') or 'Não informada'}`")
+            st.write(f"**🏡 Fazenda:** `{cliente_data.get('nome_fazenda') or 'Não informada'}`")
+            st.write(f"**🎯 Tags:** `{', '.join(cliente_data.get('tags_detectadas', []))}`")
             
+            st.subheader("Evolução do Lead Score")
+            historico_score = cliente_data.get('lead_score_historico', [])
+            
+            if historico_score and isinstance(historico_score, list) and len(historico_score) > 1:
+                df_score = pd.DataFrame(historico_score)
+                df_score['timestamp'] = pd.to_datetime(df_score['timestamp'])
+                
+                fig_score = px.line(df_score, x='timestamp', y='score', title='Linha do Tempo do Score do Lead', markers=True)
+                fig_score.update_layout(xaxis_title='Data', yaxis_title='Lead Score')
+                st.plotly_chart(fig_score, use_container_width=True)
+            else:
+                st.info("Não há dados históricos de score suficientes para gerar um gráfico.")
+
             st.subheader("Histórico da Conversa")
-            # Usando st.chat_message para uma visualização mais limpa
-            for msg in cliente_data['historico_conversa']:
+            historico_conversa = cliente_data.get('historico_conversa', [])
+            for msg in historico_conversa:
                 role = msg.get("role", "desconhecido")
                 avatar = "👤" if role == 'user' else "🤖"
                 with st.chat_message(name=role, avatar=avatar):
-                    st.write(msg['content'])
+                    st.write(msg.get('content'))

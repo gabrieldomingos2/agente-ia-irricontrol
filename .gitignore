@@ -49,3 +49,8 @@ backend/static/arquivos/*
 *.sh
 irricontrol_app.log
 *.ps1
+
+# DB local
+/data/*.db
+/data/*.sqlite
+
